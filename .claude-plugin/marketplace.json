@@ -1,0 +1,13 @@
+{
+  "name": "claude-tempo",
+  "owner": {
+    "name": "KDL Solution"
+  },
+  "plugins": [
+    {
+      "name": "tempo",
+      "source": "./tempo",
+      "description": "Single `/tempo` command — auto-drafts Jira/Tempo worklog entries from your git commits and JIRA activity for a chosen period, you review/edit, then batch-submit. Uses Jira native worklogs (auto-synced to Tempo Cloud)."
+    }
+  ]
+}
