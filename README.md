@@ -23,41 +23,42 @@
 
 재시작 후 `/tempo` 자동완성 확인.
 
-### 3. 첫 실행 + config 작성
+### 3. 첫 실행 (Zero-config)
 
 ```
 /tempo
 ```
 
-처음 실행 시 `~/.config/claude-tempo/config.json` 이 자동 생성됨. 본인 환경에 맞게 편집:
+설정 파일을 직접 편집할 필요 **없음**. 첫 실행 시 자동으로:
 
-```json
-{
-  "repos": [
-    "/Users/<you>/Desktop/Kdl/Code/DeepAgent-API",
-    "/Users/<you>/Desktop/Kdl/Code/claude-jira-ticket",
-    "/Users/<you>/Desktop/Kdl/Code/claude-slack-notifier",
-    "/Users/<you>/Desktop/Kdl/Code/claude-tempo"
-  ],
-  "git_author": null,
-  "working_hours_per_day": 8,
-  "working_days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
-  "ticket_pattern": "JUNGLETFT-\\d+",
-  "trackable_epics": ["JUNGLETFT-251", "JUNGLETFT-258", "JUNGLETFT-250"],
-  "buckets": [
-    { "label": "사내 도구 / 행정", "key": null, "hint": "JIRA 키 없는 commit 들을 묶을 default 티켓 키" }
-  ]
-}
+1. **로컬 git 레포 자동 감지** — `~/Desktop/Kdl/Code`, `~/Code`, `~/Workspace`, `~/projects`, `~/work`, `~/dev`, `~/Documents/Code` 를 스캔해서 origin URL 에 `KDL-Solution` / `koreadeep` 이 들어간 레포만 추출
+2. **git author 자동 감지** — `git config --global user.email`
+3. **default 값들 적용** — working hours 8h/day, Mon~Fri, JUNGLETFT 패턴, trackable epics (251/258/250)
+4. 위 결과를 표로 보여주고 한 번 `y/e/m` 확답:
+   - `y` → 그대로 저장하고 바로 이번 주 draft 진행
+   - `e` → 자연어로 편집 ("5번 빼", "/Users/me/foo 추가", "bucket key 를 JUNGLETFT-900 으로")
+   - `m` → JSON 편집기로 직접 (advanced)
+
+저장 위치: `~/.config/claude-tempo/config.json`
+
+#### 재설정
+
 ```
+/tempo reconfigure
+```
+
+→ 다시 자동 감지 + 인터랙티브 부트스트랩 실행.
+
+#### Config 키 reference (자동 부트스트랩으로 충분하지만, 알고 싶다면)
 
 | 키 | 설명 |
 |---|---|
-| `repos` | 매주 commit 스캔할 로컬 git 레포 목록 (절대 경로) |
-| `git_author` | `null` 이면 각 레포의 `git config user.email` 사용. 명시하면 그 author 로 필터 |
+| `repos` | 스캔할 로컬 git 레포 (절대 경로) |
+| `git_author` | commit author email. 비우면 `git config --global user.email` 사용 |
 | `working_hours_per_day` | 하루 분배할 총 시간 (default 8h) |
-| `working_days` | 분배 대상 요일. 주말 제외하려면 default 그대로 |
-| `ticket_pattern` | commit message / 브랜치명에서 티켓 키 추출 정규식 |
-| `trackable_epics` | 이 에픽들 밖 티켓에 worklog 입력 시 ⚠️ 경고. 입력은 진행하되 "경관 view 집계 안 될 수 있음" 표시 |
+| `working_days` | 분배 대상 요일 |
+| `ticket_pattern` | commit/브랜치명에서 티켓 키 추출 정규식 |
+| `trackable_epics` | 이 에픽들 밖 티켓에 worklog 입력 시 ⚠️ 경고 |
 | `buckets[0].key` | JIRA 키 없는 commit 들의 default landing ticket. 비어 있으면 매번 물음 |
 
 ---
@@ -137,7 +138,7 @@
 
 | 증상 | 원인 / 해결 |
 |---|---|
-| `~/.config/claude-tempo/config.json not found` | 첫 실행이라 자동 생성됨 — 안내 메시지대로 편집 후 다시 실행 |
+| `~/.config/claude-tempo/config.json not found` | 첫 실행이라 자동 부트스트랩 진행 — 안내대로 `y/e/m` 응답 |
 | `git author 가 commit 못 찾음` | `git_author` 가 `null` 인지, 또는 본인 이메일이 정확한지 확인. 각 레포의 `git config user.email` 출력 비교 |
 | `티켓 키가 추출 안 됨` | commit message 끝에 `(JUNGLETFT-XXX)` suffix 있는지 확인. 없으면 브랜치명 fallback. 둘 다 없으면 bucket 으로 |
 | `addWorklogToJiraIssue 권한 없음` | Atlassian MCP 연결 재확인 + JIRA 권한(worklog 작성 가능 role) 확인 |

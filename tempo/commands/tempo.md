@@ -18,33 +18,96 @@ tempo URL  : https://koreadeep.atlassian.net/plugins/servlet/ac/io.tempo.jira/te
 
 ---
 
-## Step 0 — Config bootstrap (first run)
+## Step 0 — Config bootstrap
 
-Read `~/.config/claude-tempo/config.json`. If it does not exist, create it with the template below and tell the user to edit it before continuing.
+Read `~/.config/claude-tempo/config.json`.
 
+### Case A — Config 가 이미 있음
+그대로 사용. 아래 Step 1 로 진행.
+
+단, `$ARGUMENTS` 에 `reconfigure` / `--reconfigure` / `--reset` / `setup` 이 포함되면 → Case B 의 부트스트랩을 강제 재실행.
+
+### Case B — Config 가 없음 (또는 reconfigure 요청) — **자동 감지 + 인터랙티브 부트스트랩**
+
+사용자가 JSON 을 직접 편집하지 않게 한다. 다음을 자동 수행:
+
+**B-1. KDL 레포 자동 감지**
+
+다음 위치들을 스캔 (`shopt -s nullglob` 효과를 위해 안전 처리):
+
+```bash
+for parent in ~/Desktop/Kdl/Code ~/Code ~/Workspace ~/projects ~/work ~/dev ~/Documents/Code; do
+  [ -d "$parent" ] || continue
+  for git_dir in "$parent"/*/.git; do
+    [ -e "$git_dir" ] || continue
+    repo=$(dirname "$git_dir")
+    remote=$(git -C "$repo" config --get remote.origin.url 2>/dev/null)
+    case "$remote" in
+      *KDL-Solution*|*koreadeep*) echo "$repo" ;;
+    esac
+  done
+done | sort -u
+```
+
+→ KDL-Solution 또는 koreadeep 이 origin URL 에 포함된 git 레포 목록.
+
+**B-2. git author 자동 감지**
+
+```bash
+git config --global user.email
+```
+
+→ 비어 있으면 (드물게) 각 레포의 `git config user.email` 중 가장 자주 등장하는 값 사용. 그것도 없으면 사용자에게 한 번 물음.
+
+**B-3. 감지 결과 표 출력 + 한 번 확인**
+
+```
+🔍 Auto-detected:
+
+git author: jude@koreadeep.com  (from ~/.gitconfig)
+
+KDL repos found (3):
+  1. /Users/jude/Desktop/Kdl/Code/DeepAgent-API
+  2. /Users/jude/Desktop/Kdl/Code/claude-jira-ticket
+  3. /Users/jude/Desktop/Kdl/Code/claude-tempo
+
+Defaults:
+- working hours/day:    8h
+- working days:          Mon~Fri
+- ticket pattern:        JUNGLETFT-\d+
+- trackable epics:       JUNGLETFT-251 / 258 / 250
+- bucket (no-key):       (없음 — JIRA 키 없는 commit 은 매번 묻습니다)
+
+이 설정으로 진행하시겠습니까?
+- y / yes        → 그대로 저장하고 이번 주 draft 시작
+- e / edit       → 자연어로 변경 사항 알려주세요 (예: "5번 빼", "/Users/jude/Code/foo 추가", "bucket key 를 JUNGLETFT-900 으로")
+- m / manual     → JSON 편집기로 직접 (기본 template 만 만들고 안내 메시지)
+```
+
+**B-4. 사용자 응답 처리**
+
+- `y` → B-3 에서 보여준 값 그대로 `~/.config/claude-tempo/config.json` 에 저장 (`mkdir -p ~/.config/claude-tempo` 먼저)
+- `e` → 자연어 편집 받아서 반영 후 다시 B-3 표 출력 + 재확인 루프
+- `m` → 기본 template (placeholder 포함) 만 저장하고 "편집 후 다시 /tempo 실행" 안내. 종료.
+
+**B-5. 저장 후 진행**
+
+저장 완료 메시지 (1줄) + Step 1 으로 자동 이어짐. "다시 /tempo 실행하라" 같은 redirect 금지 — 한 turn 안에 부트스트랩 + 본 작업까지 끝낸다.
+
+저장 포맷 (참고):
 ```json
 {
-  "repos": [
-    "/Users/<you>/Desktop/Kdl/Code/DeepAgent-API",
-    "/Users/<you>/Desktop/Kdl/Code/claude-jira-ticket",
-    "/Users/<you>/Desktop/Kdl/Code/claude-slack-notifier",
-    "/Users/<you>/Desktop/Kdl/Code/claude-tempo"
-  ],
-  "git_author": null,
+  "repos": ["/Users/jude/Desktop/Kdl/Code/DeepAgent-API", ...],
+  "git_author": "jude@koreadeep.com",
   "working_hours_per_day": 8,
   "working_days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
   "ticket_pattern": "JUNGLETFT-\\d+",
   "trackable_epics": ["JUNGLETFT-251", "JUNGLETFT-258", "JUNGLETFT-250"],
   "buckets": [
-    { "label": "사내 도구 / 행정", "key": null, "hint": "JIRA 키 없는 commit 들을 묶을 default 티켓 키. 비워두면 매 실행 시 묻는다" }
+    { "label": "사내 도구 / 행정", "key": null }
   ]
 }
 ```
-
-- `git_author` `null` 이면 각 레포의 `git config user.email` 사용
-- `working_hours_per_day` × 일자 = 그날 분배할 총 시간
-- `trackable_epics` — 이 에픽들 밖 티켓에 worklog 입력 시 ⚠️ 경고 (Tempo 경관 view 집계 안 될 수 있음). 입력은 진행하되 표시.
-- `buckets` — JIRA 키 없는 commit 들의 default landing ticket. 비어 있으면 사용자에게 물음.
 
 ---
 
