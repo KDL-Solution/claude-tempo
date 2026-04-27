@@ -31,12 +31,12 @@ Read `~/.config/claude-tempo/config.json`.
 
 사용자가 JSON 을 직접 편집하지 않게 한다. 다음을 자동 수행:
 
-**B-1. KDL 레포 자동 감지**
+**B-1. KDL 레포 자동 감지 + 추가 경로 입력**
 
-다음 위치들을 스캔 (`shopt -s nullglob` 효과를 위해 안전 처리):
+(1) 일반적인 코드 디렉토리 후보를 먼저 스캔 (`shopt -s nullglob` 효과를 위해 안전 처리):
 
 ```bash
-for parent in ~/Desktop/Kdl/Code ~/Code ~/Workspace ~/projects ~/work ~/dev ~/Documents/Code; do
+for parent in ~/Code ~/Workspace ~/projects ~/work ~/dev ~/Documents/Code; do
   [ -d "$parent" ] || continue
   for git_dir in "$parent"/*/.git; do
     [ -e "$git_dir" ] || continue
@@ -51,6 +51,30 @@ done | sort -u
 
 → KDL-Solution 또는 koreadeep 이 origin URL 에 포함된 git 레포 목록.
 
+(2) 자동 스캔 결과를 보여주고 **추가 경로를 묻는다** (개인마다 코드 디렉토리 위치가 다르므로 필수 단계):
+
+```
+🔍 자동 스캔 결과 (~/Code, ~/Workspace, ~/projects, ~/work, ~/dev, ~/Documents/Code):
+
+발견된 KDL 레포 (N개):
+  - /path/to/repo-1
+  - /path/to/repo-2
+  ...
+(또는 "발견된 레포 없음")
+
+코드가 모여있는 추가 디렉토리가 있나요?
+- 없으면 → 'skip' 또는 'n'
+- 자연어로 경로 알려주세요 (예: "~/Desktop/Kdl/Code", "/Users/me/work/koreadeep 와 ~/repos 추가")
+```
+
+사용자가 경로(들) 입력 시:
+- `~` 는 `$HOME` 으로 expand
+- 입력된 각 디렉토리에 대해 (1) 과 동일한 스캔 로직 재실행
+- 자동 스캔 결과 ∪ 추가 스캔 결과 → 최종 후보 리스트
+- 추가 경로 자체는 향후 재실행 시 활용하기 위해 config 의 `scan_dirs` 필드(string array) 에 저장
+
+`skip` / `n` / 빈 입력 → 자동 스캔 결과만 사용.
+
 **B-2. git author 자동 감지**
 
 ```bash
@@ -64,12 +88,15 @@ git config --global user.email
 ```
 🔍 Auto-detected:
 
-git author: jude@koreadeep.com  (from ~/.gitconfig)
+git author: <감지된 이메일>  (from ~/.gitconfig)
 
-KDL repos found (3):
-  1. /Users/jude/Desktop/Kdl/Code/DeepAgent-API
-  2. /Users/jude/Desktop/Kdl/Code/claude-jira-ticket
-  3. /Users/jude/Desktop/Kdl/Code/claude-tempo
+KDL repos found (N):
+  1. <발견된 레포 절대경로>
+  2. ...
+
+Scan dirs (저장됨, 다음 번에도 사용):
+  - ~/Code, ~/Workspace, ... (기본)
+  - <사용자가 추가한 경로> (있으면)
 
 Defaults:
 - working hours/day:    8h
@@ -80,7 +107,7 @@ Defaults:
 
 이 설정으로 진행하시겠습니까?
 - y / yes        → 그대로 저장하고 이번 주 draft 시작
-- e / edit       → 자연어로 변경 사항 알려주세요 (예: "5번 빼", "/Users/jude/Code/foo 추가", "bucket key 를 JUNGLETFT-900 으로")
+- e / edit       → 자연어로 변경 사항 알려주세요 (예: "3번 빼", "<절대경로> 추가", "bucket key 를 JUNGLETFT-900 으로")
 - m / manual     → JSON 편집기로 직접 (기본 template 만 만들고 안내 메시지)
 ```
 
@@ -97,8 +124,9 @@ Defaults:
 저장 포맷 (참고):
 ```json
 {
-  "repos": ["/Users/jude/Desktop/Kdl/Code/DeepAgent-API", ...],
-  "git_author": "jude@koreadeep.com",
+  "repos": ["<발견된 KDL 레포 절대경로>", "..."],
+  "scan_dirs": ["~/Code", "~/Workspace", "~/projects", "~/work", "~/dev", "~/Documents/Code"],
+  "git_author": "<git config user.email 결과>",
   "working_hours_per_day": 8,
   "working_days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
   "ticket_pattern": "JUNGLETFT-\\d+",
@@ -108,6 +136,8 @@ Defaults:
   ]
 }
 ```
+
+`scan_dirs` 는 사용자가 추가 입력한 경로를 포함하여 영구 저장 — `reconfigure` 또는 `--reset` 으로 다시 실행 시 기본값으로 사용된다.
 
 ---
 

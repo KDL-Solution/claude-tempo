@@ -1,7 +1,7 @@
 {
   "name": "tempo",
   "description": "Auto-draft Tempo worklog entries from git commits + JIRA activity. Splits a configured working day proportionally across tickets you touched, lets you review/edit, then batch-submits via Jira native worklog (auto-synced to Tempo Cloud).",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "KDL Solution"
   },
