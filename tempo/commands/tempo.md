@@ -2,7 +2,7 @@
 description: Auto-draft Jira/Tempo worklog entries from git commits + JIRA activity, review/edit, then batch-submit
 ---
 
-You are the `/tempo` worklog automator for the **JUNGLETFT** project. Goal: turn the user's git commits and JIRA activity in a chosen period into a draft worklog table, let the user review/edit, then batch-submit via Atlassian MCP `addWorklogToJiraIssue` (which Tempo Cloud auto-syncs).
+You are the `/tempo` worklog automator for **all KDL Jira projects** (JUNGLETFT, AISS, GG, B2B, B2G, etc.). Goal: turn the user's git commits and JIRA activity in a chosen period into a draft worklog table, let the user review/edit, then batch-submit via Atlassian MCP `addWorklogToJiraIssue` (which Tempo Cloud auto-syncs).
 
 This command is for a single user's personal time tracking. Be concise, fast, and never submit without explicit user confirmation.
 
@@ -101,8 +101,8 @@ Scan dirs (저장됨, 다음 번에도 사용):
 Defaults:
 - working hours/day:    8h
 - working days:          Mon~Fri
-- ticket pattern:        JUNGLETFT-\d+
-- trackable epics:       JUNGLETFT-251 / 258 / 250
+- ticket pattern:        [A-Z][A-Z0-9_]+-\d+   (모든 KDL Jira 프로젝트 — JUNGLETFT, AISS, GG, B2B, B2G 등)
+- trackable epics:       [] (비어있음 = 모든 에픽 ✅. 특정 에픽만 ✅ 표시하고 싶으면 키 나열)
 - bucket (no-key):       (없음 — JIRA 키 없는 commit 은 매번 묻습니다)
 
 이 설정으로 진행하시겠습니까?
@@ -129,8 +129,8 @@ Defaults:
   "git_author": "<git config user.email 결과>",
   "working_hours_per_day": 8,
   "working_days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
-  "ticket_pattern": "JUNGLETFT-\\d+",
-  "trackable_epics": ["JUNGLETFT-251", "JUNGLETFT-258", "JUNGLETFT-250"],
+  "ticket_pattern": "[A-Z][A-Z0-9_]+-\\d+",
+  "trackable_epics": [],
   "buckets": [
     { "label": "사내 도구 / 행정", "key": null }
   ]
@@ -174,7 +174,7 @@ git -C <repo> log \
 - `--no-merges` 로 머지 commit 제외
 - 각 commit 에서:
   - 날짜 (커밋 author date 의 로컬 타임존 기준 YYYY-MM-DD)
-  - JIRA 키 추출 — 정규식 `config.ticket_pattern` (default `JUNGLETFT-\d+`)
+  - JIRA 키 추출 — 정규식 `config.ticket_pattern` (default `[A-Z][A-Z0-9_]+-\d+` — 모든 프로젝트)
     - 추출 우선순위: (1) commit message → (2) 브랜치명 (`git -C <repo> name-rev --name-only <sha>` 등으로 inferred branch). 못 찾으면 `null`
   - subject (요약용)
 
@@ -233,10 +233,14 @@ for each ticket:
 
 ## Step 6 — Trackable epic 검증
 
+`config.trackable_epics` 가 **비어있거나 (`[]`) 없으면 모든 에픽 ✅** — 별도 호출 없이 통과. Step 7 로.
+
+설정에 키가 들어있을 때만 (특정 에픽 view 집계용 좁히고 싶은 경우) 다음 검증 수행:
+
 각 후보 티켓에 대해 `mcp__atlassian__getJiraIssue` 로 `parent.key` 조회 (병렬 호출):
 
 - `parent.key` ∈ `config.trackable_epics` → ✅
-- 그 외 → ⚠️ "경관 view 집계 안 될 수 있음" 표시
+- 그 외 → ⚠️ "지정된 epic view 집계 안 될 수 있음" 표시
 - Subtask 면 상위 Story 의 epic 까지 한 단계 더 추적
 
 epic 조회는 캐시 (같은 티켓 여러 번 안 호출하게).
