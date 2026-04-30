@@ -249,18 +249,18 @@ epic 조회는 캐시 (같은 티켓 여러 번 안 호출하게).
 
 ## Step 7 — Draft 표 출력
 
-다음 형식으로 사용자에게 보임:
+같은 날의 행은 **계산된 `started` 시각 오름차순**으로 정렬해서 시간순으로 보이게 한다 (Step 9-1 의 cursor 계산을 미리 적용해 시작 시각 컬럼을 채워 보여주는 것이 이상적):
 
 ```
 📊 Tempo 입력 draft — 2026-04-27 ~ 2026-04-30 (working hours: 8h/day)
 
-| # | 날짜       | 티켓             | 시간 | 근거                                     | epic 체크 |
-|---|----------|----------------|----|---------------------------------------|---------|
-| 1 | 04-27 (월) | JUNGLETFT-847  | 4h | 5 commits @ DeepAgent-API              | ✅       |
-| 2 | 04-27 (월) | JUNGLETFT-849  | 4h | 3 commits @ DeepAgent-API              | ✅       |
-| 3 | 04-28 (화) | JUNGLETFT-852  | 6h | 4 commits + status changes             | ✅       |
-| 4 | 04-28 (화) | JUNGLETFT-XXX  | 2h | 2 commits @ claude-jira-ticket (bucket) | ⚠️ epic 밖 |
-| 5 | 04-29 (수) | JUNGLETFT-834  | 8h | 진행 중 (commit 없음, status 변경 1건)      | ✅       |
+| # | 날짜       | 시작    | 티켓             | 시간 | 근거                                     | epic 체크 |
+|---|----------|--------|----------------|----|---------------------------------------|---------|
+| 1 | 04-27 (월) | 09:00 | JUNGLETFT-847  | 4h | 5 commits @ DeepAgent-API              | ✅       |
+| 2 | 04-27 (월) | 13:00 | JUNGLETFT-849  | 4h | 3 commits @ DeepAgent-API              | ✅       |
+| 3 | 04-28 (화) | 09:00 | JUNGLETFT-852  | 6h | 4 commits + status changes             | ✅       |
+| 4 | 04-28 (화) | 15:00 | JUNGLETFT-XXX  | 2h | 2 commits @ claude-jira-ticket (bucket) | ⚠️ epic 밖 |
+| 5 | 04-29 (수) | 09:00 | JUNGLETFT-834  | 8h | 진행 중 (commit 없음, status 변경 1건)      | ✅       |
 
 총: 24h (working days: 3, capacity: 24h) ✓
 
@@ -289,21 +289,58 @@ epic 조회는 캐시 (같은 티켓 여러 번 안 호출하게).
 
 ## Step 9 — Submit (사용자 `y` 확인 후만)
 
-각 행마다 `mcp__atlassian__addWorklogToJiraIssue` 호출 (병렬 가능):
+각 행마다 `mcp__atlassian__addWorklogToJiraIssue` 호출:
 
 ```
 {
   "cloudId": "82e07c0e-2b44-4f8f-bf33-d7a59c5ccf0f",
   "issueIdOrKey": "<티켓 키>",
   "timeSpent": "<Nh 또는 NhMm>",
-  "started": "<YYYY-MM-DDT09:00:00.000+0900>",
+  "started": "<YYYY-MM-DDTHH:MM:00.000+0900>",
   "commentBody": "<commit subjects 1줄 요약 또는 기본 'Worklog from /tempo'>"
 }
 ```
 
-- `started` 의 시각은 `09:00:00` 로 통일 (분 단위 정확도 불필요)
-- 같은 날 여러 entry 라도 same `started` 사용 OK — Tempo 가 timeSpent 기반으로 누적
+### 시간 배치 규칙 — **겹치지 않게, 시간순으로**
+
+Tempo UI 는 같은 날 여러 worklog 를 `started` 시각 기준으로 캘린더에 그리기 때문에, 모두 같은 시각(`09:00`)으로 보내면 **위아래로 겹쳐 보여 가독성이 망가진다**. 따라서:
+
+**9-1. 날짜별 타임라인 구성 (제출 직전)**
+
+각 날짜 D 마다:
+1. 해당 날짜에 이미 입력된 worklog 들을 조회 (`occupied = [(started_dt, timeSpentSeconds), ...]`)
+   - Step 1 직후 안전 규칙 #2 에서 받은 데이터 재사용 가능
+2. 본 PR 의 새 entries 를 사용자 표 (Step 7) 의 행 순서대로 정렬 — 사용자가 수동 편집한 순서가 의도된 순서임
+3. **anchor = 09:00**. 빈 슬롯을 anchor 부터 앞으로 검색하며 새 entry 를 쌓아간다:
+   - 새 entry 의 `started` = max(anchor, 모든 occupied/이미 배치된 entry 의 종료 시각 중 anchor 이후 가장 가까운 빈 구간)
+   - 새 entry 가 들어가면 그 종료 시각이 다음 anchor 후보가 됨
+
+   간단 알고리즘:
+   ```
+   slots = sorted(occupied, key=lambda s: s.start)
+   cursor = 09:00
+   for entry in entries_ordered:
+       # cursor 가 어떤 occupied slot 안에 있으면 그 slot 끝으로 이동
+       for s in slots:
+           if s.start <= cursor < s.end:
+               cursor = s.end
+       entry.started = cursor
+       cursor = cursor + entry.duration
+       slots.append((entry.started, cursor))
+   ```
+4. 점심시간 같은 휴게는 별도로 끼워 넣지 않는다 (사용자가 표에 명시한 시간만 정직하게 채움)
+
+**9-2. 제출 순서**
+
+각 entry 를 `started` 오름차순으로 **순차 호출** (병렬 X). 같은 시각이라도 정렬 안정성을 위해 표 순서 유지.
+
+**9-3. 출력**
+
+draft 표 / report 에서도 같은 날의 행은 `started` 오름차순으로 정렬해 사용자가 시간순으로 확인할 수 있게 한다 (Step 7 / Step 10 출력 모두).
+
+### 그 외
 - 하나라도 실패하면: 실패 행 표시 + 성공한 것들은 그대로 두고 retry 옵션 제시
+- timeSpent 가 분 단위(예: 1h 15m) 인 경우도 위 cursor 계산이 동일하게 적용됨
 
 ---
 
