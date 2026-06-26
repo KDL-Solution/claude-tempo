@@ -160,23 +160,25 @@ User 의 `$ARGUMENTS` 를 보고 기간 결정:
 
 ## Step 2 — Collect git activity
 
-각 `repos[i]` 에 대해 한 번씩:
+각 `repos[i]` 에 대해 한 번씩. **subject 만이 아니라 commit body 까지 전수 조사**한다 — squash-merge PR 커밋은 JIRA 키가 subject 가 아니라 **body** 에만 있는 경우가 많다 (예: subject 는 `(#911)` PR 번호만, body 에 `JUNGLETFT-881`):
 
 ```bash
 git -C <repo> log \
   --author="<git_author>" \
   --since="<start>" --until="<end>" \
-  --pretty=format:'%H|%aI|%s' \
-  --no-merges
+  --no-merges \
+  --pretty=format:'@@C@@%H|%aI|%s%n%b'
 ```
 
+- 출력은 `@@C@@` 로 커밋 단위 분리. 각 레코드 = 헤더줄 `HASH|ISO|subject` + 다음 `@@C@@` 전까지의 body 여러 줄.
 - `git_author` config 에 명시 안 되어 있으면, 각 레포의 `git -C <repo> config user.email` 결과 사용
 - `--no-merges` 로 머지 commit 제외
 - 각 commit 에서:
   - 날짜 (커밋 author date 의 로컬 타임존 기준 YYYY-MM-DD)
-  - JIRA 키 추출 — 정규식 `config.ticket_pattern` (default `[A-Z][A-Z0-9_]+-\d+` — 모든 프로젝트)
-    - 추출 우선순위: (1) commit message → (2) 브랜치명 (`git -C <repo> name-rev --name-only <sha>` 등으로 inferred branch). 못 찾으면 `null`
-  - subject (요약용)
+  - JIRA 키 추출 — 정규식 `config.ticket_pattern` (default `[A-Z][A-Z0-9_]+-\d+` — 모든 프로젝트). **subject + body + 브랜치명 전부**에서 매칭.
+    - **primary 키** 우선순위: (1) subject 의 키 → (2) 브랜치명 (`git -C <repo> name-rev --name-only <sha>`) → (3) body 의 **첫** 키. 셋 다 없으면 `null`
+    - **rollup 커밋 주의**: `release:` / `chore: sync` 처럼 body 가 여러 키를 나열하는 배포·동기화 커밋은 그 키 전부에 시간을 분배하지 말 것 (과대계상). primary 키 1개만 쓰거나, 키가 없으면 deploy/bucket 으로 떨군다.
+  - subject + body (요약용)
 
 ---
 
@@ -201,16 +203,30 @@ git -C <repo> log \
 
 ## Step 4 — JIRA activity 보강
 
-같은 기간에 본인이 commit 없이도 활동한 티켓 추가:
+같은 기간에 본인이 commit 없이도 활동한 티켓을 **전수 조사**한다. JQL 을 넓게 — status 변경/코멘트만이 아니라, 그 기간에 assignee 로 만지거나 worklog 를 남긴 티켓까지:
 
 ```
-JQL: assignee = currentUser() AND (
-  status changed BY currentUser() DURING ("<start>", "<end>")
-  OR comment ~ "" AND updated >= "<start>" AND updated <= "<end>"
+JQL: (
+  (assignee = currentUser() AND updated >= "<start>" AND updated <= "<end>")
+  OR status changed BY currentUser() DURING ("<start>", "<end>")
+  OR (comment ~ currentUser() AND updated >= "<start>" AND updated <= "<end>")
+  OR worklogAuthor = currentUser() AND worklogDate >= "<start>"
 )
+ORDER BY updated DESC
 ```
 
 → `mcp__atlassian__searchJiraIssuesUsingJql` 호출. commit 표에 없는 키만 추가하고 `commits: 0` 으로 표시 (시간 0h, 사용자가 채우게 함).
+
+### Step 4-bis — 키 못 찾은 commit 의 티켓 역추적 (fallback)
+
+Step 2 에서 subject/body/브랜치 어디에도 키가 없어 `null` 로 떨어진 commit 은 **bucket 으로 보내기 전에** subject 텍스트로 JIRA 를 한 번 검색해 티켓을 추정한다:
+
+```
+JQL: project in (<config 의 모든 프로젝트>) AND summary ~ "<subject 핵심 키워드>" ORDER BY updated DESC
+```
+
+- 매칭된 티켓이 본인 assignee 이고 의미가 맞으면 그 키로 매핑 (draft 표 근거란에 `(추정: summary 매칭)` 표기).
+- 그래도 못 찾으면 `(no-key)` → `buckets[0].key`.
 
 ---
 
