@@ -2,7 +2,9 @@
 
 매주 매일 Tempo 에 시간 입력하기 귀찮은 사람을 위한 Claude Code 플러그인.
 
-`/tempo` 한 번이면 git commit + JIRA 활동 → 일자/티켓별 worklog draft 자동 생성 → 본인 검토/편집 → batch 입력. Jira native worklog 로 입력하면 Tempo Cloud 가 자동 동기화하므로 별도 Tempo API 토큰 불필요.
+`/tempo` 한 번이면 GitHub 활동 (org 전체 commit + PR) + JIRA 활동 → 일자/티켓별 worklog draft 자동 생성 → 본인 검토/편집 → batch 입력. Jira native worklog 로 입력하면 Tempo Cloud 가 자동 동기화하므로 별도 Tempo API 토큰 불필요.
+
+> **데이터 소스 = 원격 GitHub org (`KDL-Solution`), 로컬 클론 아님.** `gh` CLI 로 org 전체를 본인 계정 기준으로 전수조사하므로, 클론 안 한 레포·pull 안 한 커밋도 누락 없이 잡힌다.
 
 ---
 
@@ -11,7 +13,7 @@
 ### 1. 사전 요구사항
 
 - **Atlassian MCP 연결** (Claude Code → ⌘⇧P → `MCP: Add Server` → Atlassian)
-- **로컬 git 레포** — 작업 commit 들이 있는 곳
+- **`gh` CLI 인증** — `gh auth login` 으로 본인 GitHub 계정 로그인. token scope 에 `repo` (private 레포 검색) + `read:org` 필요. org 전수조사하려면 `github_org` (default `KDL-Solution`) membership 필수
 - (Tempo 경관 view 집계용으로) 작업 티켓이 **특정 에픽** 의 자식이어야 함 — 아래 config `trackable_epics` 참고
 
 ### 2. 설치
@@ -31,12 +33,12 @@
 
 설정 파일을 직접 편집할 필요 **없음**. 첫 실행 시 자동으로:
 
-1. **로컬 git 레포 자동 감지** — `~/Desktop/Kdl/Code`, `~/Code`, `~/Workspace`, `~/projects`, `~/work`, `~/dev`, `~/Documents/Code` 를 스캔해서 origin URL 에 `KDL-Solution` / `koreadeep` 이 들어간 레포만 추출
-2. **git author 자동 감지** — `git config --global user.email`
-3. **default 값들 적용** — working hours 8h/day, Mon~Fri, JUNGLETFT 패턴, trackable epics (251/258/250)
+1. **GitHub 계정/org 자동 감지** — `gh api user` 로 `github_login` 감지, `github_org` 는 default `KDL-Solution` (소속 org 여러 개면 한 번 확인)
+2. **commit author email 감지 (보조)** — `git config --global user.email` → `git_authors` union (GitHub 계정에 연결 안 된 이메일 커밋 보강용)
+3. **default 값들 적용** — working hours 8h/day, Mon~Fri, 전 KDL 프로젝트 패턴, 모든 에픽 (`trackable_epics: []`)
 4. 위 결과를 표로 보여주고 한 번 `y/e/m` 확답:
    - `y` → 그대로 저장하고 바로 이번 주 draft 진행
-   - `e` → 자연어로 편집 ("5번 빼", "/Users/me/foo 추가", "bucket key 를 JUNGLETFT-900 으로")
+   - `e` → 자연어로 편집 ("org 를 X 로", "bucket key 를 JUNGLETFT-900 으로")
    - `m` → JSON 편집기로 직접 (advanced)
 
 저장 위치: `~/.config/claude-tempo/config.json`
@@ -53,12 +55,15 @@
 
 | 키 | 설명 |
 |---|---|
-| `repos` | 스캔할 로컬 git 레포 (절대 경로) |
-| `git_author` | commit author email. 비우면 `git config --global user.email` 사용 |
+| `github_org` | 전수조사할 GitHub org (default `KDL-Solution`) |
+| `github_login` | 원격 commit/PR author 기준 GitHub 계정. 비우면 `gh api user` 로 감지 |
+| `git_authors` | commit author-email union (GitHub 계정에 연결 안 된 이메일 커밋 보강) |
+| `git_author` | (하위호환) 단일 이메일. `git_authors` 없을 때만 사용 |
+| `repos` / `scan_dirs` | **offline fallback 전용** 로컬 git 레포 / 스캔 경로. gh 정상이면 미사용 |
 | `working_hours_per_day` | 하루 분배할 총 시간 (default 8h) |
 | `working_days` | 분배 대상 요일 |
-| `ticket_pattern` | commit/브랜치명에서 티켓 키 추출 정규식 |
-| `trackable_epics` | 이 에픽들 밖 티켓에 worklog 입력 시 ⚠️ 경고 |
+| `ticket_pattern` | commit/PR/브랜치명에서 티켓 키 추출 정규식 |
+| `trackable_epics` | 이 에픽들 밖 티켓에 worklog 입력 시 ⚠️ 경고 (`[]` = 모든 에픽 ✅) |
 | `buckets[0].key` | JIRA 키 없는 commit 들의 default landing ticket. 비어 있으면 매번 물음 |
 
 ---
@@ -85,8 +90,8 @@
 
 ## 동작 흐름
 
-1. **수집** — 각 레포에서 `git log --author=<나> --since=<start> --until=<end>` 실행, commit message / 브랜치명에서 `JUNGLETFT-XXX` 추출
-2. **JIRA 보강** — 같은 기간에 commit 없이 status 만 바꾼 / 코멘트만 단 티켓도 후보에 추가
+1. **수집 (원격 전수조사)** — `gh search commits --owner <org> --author <나>` 로 org 전체 커밋 + `gh search prs` 로 PR (authored ∪ reviewed) 수집. commit message(subject+body) / PR title / 브랜치명에서 티켓 키 추출. commit 검색은 default 브랜치만 보므로 미머지 작업은 PR 이 메움
+2. **JIRA 보강** — 같은 기간에 commit 없이 status 만 바꾼 / 코멘트만 단 / worklog 만 남긴 티켓도 후보에 추가. 커밋·PR·JIRA 세 소스 키를 교차 검증해 한쪽에만 있는 것도 노출
 3. **시간 산정** — 그날 commit 개수 비례로 working_hours_per_day 분배 (30분 단위 round)
 4. **에픽 검증** — 각 티켓의 parent epic 이 `trackable_epics` 에 있는지 확인
 5. **Draft 표 출력** — 일자 × 티켓 × 시간 × 근거 + 에픽 체크 마크
@@ -121,7 +126,7 @@
 - **명시 confirm 없이 입력하지 않음** — 표 검토 후 `y` 받아야만 submit
 - **중복 방지** — 같은 (날짜, 티켓) 조합에 이미 worklog 있으면 ⚠️ 표시
 - **수정/삭제 안 함** — 기존 worklog 는 절대 덮어쓰지 않음. 변경/삭제 필요하면 Tempo UI 에서 직접
-- **에러 보고** — git/JIRA 호출 실패 시 어느 단계에서 멈췄는지 명확히
+- **에러 보고** — gh/JIRA 호출 실패 시 어느 단계에서 멈췄는지 명확히
 
 ---
 
@@ -129,7 +134,7 @@
 
 - **시간 산정은 추정** — commit 개수 비례 분배. 실제 작업 시간과 차이날 수 있음 → 표 검토 시 본인이 편집
 - **JIRA 키 없는 commit** — `buckets[0].key` 로 자동 매핑하거나 매번 사용자가 지정 (회의 / 문서 / 행정 등을 묶을 default ticket)
-- **회의 / 문서 작업** — git 활동에 안 잡힘. `e` 편집으로 행 추가
+- **회의 / 문서 작업** — GitHub 활동에 안 잡힘. `e` 편집으로 행 추가
 - **Tempo 전용 필드** (Account, Activity 등) — 이 도구는 입력하지 않음. 필요하면 Tempo UI 에서 사후 보강
 
 ---
@@ -139,8 +144,9 @@
 | 증상 | 원인 / 해결 |
 |---|---|
 | `~/.config/claude-tempo/config.json not found` | 첫 실행이라 자동 부트스트랩 진행 — 안내대로 `y/e/m` 응답 |
-| `git author 가 commit 못 찾음` | `git_author` 가 `null` 인지, 또는 본인 이메일이 정확한지 확인. 각 레포의 `git config user.email` 출력 비교 |
-| `티켓 키가 추출 안 됨` | commit message 끝에 `(JUNGLETFT-XXX)` suffix 있는지 확인. 없으면 브랜치명 fallback. 둘 다 없으면 bucket 으로 |
+| `커밋/PR 이 0건으로 나옴` | `gh auth status` 로 로그인 + scope (`repo`, `read:org`) 확인. `github_login` / `github_org` 가 맞는지, 해당 org membership 있는지 확인 |
+| `일부 커밋이 본인 걸로 안 잡힘` | GitHub 계정에 연결 안 된 이메일로 커밋된 경우. 그 이메일을 `git_authors` 에 추가하면 `--author-email` union 으로 잡힘 |
+| `티켓 키가 추출 안 됨` | commit message(subject+body) / PR title / 브랜치명에 `JUNGLETFT-XXX` 있는지 확인. 없으면 Step 4-bis summary 매칭 → bucket 으로 |
 | `addWorklogToJiraIssue 권한 없음` | Atlassian MCP 연결 재확인 + JIRA 권한(worklog 작성 가능 role) 확인 |
 | `Tempo 경관 view 에 안 잡힘` | 그 티켓의 parent epic 이 `trackable_epics` 밖. 티켓을 적절한 에픽 하위로 옮기거나 다른 티켓에 입력 |
 
