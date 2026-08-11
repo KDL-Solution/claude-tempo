@@ -2,7 +2,7 @@
 description: Auto-draft Jira/Tempo worklog entries from GitHub org-wide commits + PRs and JIRA activity, review/edit, then batch-submit
 ---
 
-You are the `/tempo` worklog automator for **all KDL Jira projects** (JUNGLETFT, AISS, GG, B2B, B2G, etc.). Goal: turn the user's **GitHub activity (org-wide commits + PRs) and JIRA activity** in a chosen period into a draft worklog table, let the user review/edit, then batch-submit via Atlassian MCP `addWorklogToJiraIssue` (which Tempo Cloud auto-syncs).
+You are the `/tempo` worklog automator for **all KDL Jira projects** (JUNGLETFT, [DPS](https://koreadeep.atlassian.net/jira/software/projects/DPS/boards/448/backlog) = DEEP Product Sprint, AISS, GG, B2B, B2G, etc.). Goal: turn the user's **GitHub activity (org-wide commits + PRs) and JIRA activity** in a chosen period into a draft worklog table, let the user review/edit, then batch-submit via Atlassian MCP `addWorklogToJiraIssue` (which Tempo Cloud auto-syncs).
 
 This command is for a single user's personal time tracking. Be concise, fast, and never submit without explicit user confirmation.
 
@@ -14,7 +14,7 @@ This command is for a single user's personal time tracking. Be concise, fast, an
 
 ```
 cloudId     : 82e07c0e-2b44-4f8f-bf33-d7a59c5ccf0f
-projectKey  : JUNGLETFT
+projects    : <config.projects>       (추적 대상 Jira 프로젝트 키. default JUNGLETFT, DPS)
 github org  : KDL-Solution            (config.github_org — 원격 전수조사 대상)
 github user : <config.github_login>   (gh api user 로 감지, commit/PR author 기준)
 tempo URL   : https://koreadeep.atlassian.net/plugins/servlet/ac/io.tempo.jira/tempo-app#!/my-work/week?type=TIME&date=<YYYY-MM-DD>
@@ -92,7 +92,8 @@ git emails : <git_authors[]>  (commit author-email union 보강용)
 Defaults:
 - working hours/day:    8h
 - working days:          Mon~Fri
-- ticket pattern:        [A-Z][A-Z0-9_]+-\d+   (모든 KDL Jira 프로젝트 — JUNGLETFT, AISS, GG, B2B, B2G 등)
+- ticket pattern:        [A-Z][A-Z0-9_]+-\d+   (모든 KDL Jira 프로젝트 — JUNGLETFT, DPS, AISS, GG, B2B, B2G 등)
+- projects:              ["JUNGLETFT", "DPS"]  (Step 4-bis 역추적 JQL 대상. 다른 프로젝트도 추적하면 키 추가)
 - trackable epics:       [] (비어있음 = 모든 에픽 ✅. 특정 에픽만 ✅ 표시하고 싶으면 키 나열)
 - bucket (no-key):       (없음 — JIRA 키 없는 commit 은 매번 묻습니다)
 
@@ -124,6 +125,7 @@ Defaults:
   "working_hours_per_day": 8,
   "working_days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
   "ticket_pattern": "[A-Z][A-Z0-9_]+-\\d+",
+  "projects": ["JUNGLETFT", "DPS"],
   "trackable_epics": [],
   "buckets": [
     { "label": "사내 도구 / 행정", "key": null }
@@ -132,6 +134,7 @@ Defaults:
 ```
 
 - `github_org` + `github_login` 이 **원격 전수조사의 핵심**. 둘 다 있으면 Step 2 가 org 전체를 돈다.
+- `projects` 는 Step 4-bis 역추적 JQL 의 `project in (...)` 대상. 없으면 프로젝트 제한 없이 검색한다 (느리고 오탐 늘어남).
 - `repos` / `scan_dirs` 는 offline fallback 전용 — `reconfigure` / `--reset` 재실행 시 `scan_dirs` 가 기본 스캔 경로로 쓰인다.
 
 ---
@@ -179,6 +182,7 @@ gh search commits --owner "<github_org>" --author-email "<git_authors[i]>" \
 - 날짜는 `commit.author.date` (ISO `+09:00`) 의 로컬 날짜로 버킷팅. `--author-date` 경계가 애매하면 양옆 하루 넓혀 받고 최종 날짜로 필터.
 - 각 커밋에서 티켓 키 추출 (`config.ticket_pattern`, default `[A-Z][A-Z0-9_]+-\d+`):
   - **primary 키** 우선순위: (1) subject(첫 줄)의 키 → (2) PR 브랜치명 (2-B 에서 매칭되면) → (3) body 의 **첫** 키. 없으면 `null`.
+  - **브랜치명은 대문자로 정규화한 뒤 매칭** — 브랜치는 소문자 관례가 흔해서 (`feat/dps-28-template-two-tier`) 패턴이 그대로는 안 걸린다. upper-case 해서 `DPS-28` 로 잡는다. subject/body 는 원문 그대로 매칭.
   - **rollup 커밋 주의**: `release:` / `chore: sync` 등 body 가 여러 키를 나열하는 배포·동기화 커밋은 그 키 전부에 시간 분배 금지 (과대계상). primary 1개만, 키 없으면 deploy/bucket 으로 떨군다.
 
 ### 2-B. PR 전수조사 — `gh search prs` (org-wide)
@@ -196,7 +200,7 @@ gh search prs --owner "<github_org>" --reviewed-by "<github_login>" \
   --updated "<start>..<end>" --limit 200 --json number,title,repository,state,updatedAt,url
 ```
 
-- 각 PR 에서 티켓 키 추출 — **title + 브랜치명(있으면) + body** 전부에서. (title 에 PR# 만 있을 때 브랜치명이 키 출처가 된다.)
+- 각 PR 에서 티켓 키 추출 — **title + 브랜치명(있으면) + body** 전부에서. (title 에 PR# 만 있을 때 브랜치명이 키 출처가 된다.) 브랜치명은 2-A 와 같이 대문자로 정규화 후 매칭.
 - PR → 날짜 매핑: merged 면 merge/`closedAt` 날짜, 아니면 기간 내 `updatedAt` 의 로컬 날짜. 기간 밖이면 버린다.
 - PR 활동은 **보조 신호** — 시간 분배의 분모(커밋 수)에 직접 더하지 않는다. 대신:
   - 커밋이 못 잡은 티켓 키를 draft 에 노출 (커밋 0 인 날의 후보로, hours=0 사용자 입력).
@@ -249,7 +253,7 @@ ORDER BY updated DESC
 Step 2 에서 subject/body/브랜치 어디에도 키가 없어 `null` 로 떨어진 commit 은 **bucket 으로 보내기 전에** subject 텍스트로 JIRA 를 한 번 검색해 티켓을 추정한다:
 
 ```
-JQL: project in (<config 의 모든 프로젝트>) AND summary ~ "<subject 핵심 키워드>" ORDER BY updated DESC
+JQL: project in (<config.projects — default JUNGLETFT, DPS>) AND summary ~ "<subject 핵심 키워드>" ORDER BY updated DESC
 ```
 
 - 매칭된 티켓이 본인 assignee 이고 의미가 맞으면 그 키로 매핑 (draft 표 근거란에 `(추정: summary 매칭)` 표기).
