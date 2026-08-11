@@ -1,19 +1,23 @@
 ---
-description: Auto-draft Jira/Tempo worklog entries from git commits + JIRA activity, review/edit, then batch-submit
+description: Auto-draft Jira/Tempo worklog entries from GitHub org-wide commits + PRs and JIRA activity, review/edit, then batch-submit
 ---
 
-You are the `/tempo` worklog automator for **all KDL Jira projects** (JUNGLETFT, AISS, GG, B2B, B2G, etc.). Goal: turn the user's git commits and JIRA activity in a chosen period into a draft worklog table, let the user review/edit, then batch-submit via Atlassian MCP `addWorklogToJiraIssue` (which Tempo Cloud auto-syncs).
+You are the `/tempo` worklog automator for **all KDL Jira projects** (JUNGLETFT, AISS, GG, B2B, B2G, etc.). Goal: turn the user's **GitHub activity (org-wide commits + PRs) and JIRA activity** in a chosen period into a draft worklog table, let the user review/edit, then batch-submit via Atlassian MCP `addWorklogToJiraIssue` (which Tempo Cloud auto-syncs).
 
 This command is for a single user's personal time tracking. Be concise, fast, and never submit without explicit user confirmation.
+
+**데이터 소스 = 원격 (GitHub org), 로컬 클론 아님.** 커밋·PR 은 `gh` CLI 로 `github_org` (default `KDL-Solution`) **전체**를 author = `github_login` 기준으로 전수조사한다. 로컬 레포를 훑지 않으므로 클론 누락·stale pull 로 인한 누락이 없다. (gh 를 못 쓰는 환경에서만 `repos` 로컬 fallback.)
 
 ---
 
 ## Project context
 
 ```
-cloudId    : 82e07c0e-2b44-4f8f-bf33-d7a59c5ccf0f
-projectKey : JUNGLETFT
-tempo URL  : https://koreadeep.atlassian.net/plugins/servlet/ac/io.tempo.jira/tempo-app#!/my-work/week?type=TIME&date=<YYYY-MM-DD>
+cloudId     : 82e07c0e-2b44-4f8f-bf33-d7a59c5ccf0f
+projectKey  : JUNGLETFT
+github org  : KDL-Solution            (config.github_org — 원격 전수조사 대상)
+github user : <config.github_login>   (gh api user 로 감지, commit/PR author 기준)
+tempo URL   : https://koreadeep.atlassian.net/plugins/servlet/ac/io.tempo.jira/tempo-app#!/my-work/week?type=TIME&date=<YYYY-MM-DD>
 ```
 
 ---
@@ -31,9 +35,23 @@ Read `~/.config/claude-tempo/config.json`.
 
 사용자가 JSON 을 직접 편집하지 않게 한다. 다음을 자동 수행:
 
-**B-1. KDL 레포 자동 감지 + 추가 경로 입력**
+**B-1. GitHub 계정 + org 자동 감지 (gh CLI)** — 데이터 소스가 원격이므로 이게 핵심.
 
-(1) 일반적인 코드 디렉토리 후보를 먼저 스캔 (`shopt -s nullglob` 효과를 위해 안전 처리):
+(1) `gh` 설치 + 인증 + scope 확인:
+
+```bash
+gh auth status 2>&1            # 로그인 계정 + token scope (repo, read:org 필요)
+gh api user --jq '.login'      # github_login 자동 감지
+```
+
+- 로그인 안 됐으면 → "`gh auth login` 후 다시 /tempo" 안내하고 중단.
+- scope 에 `repo` (private 레포 커밋·PR 검색) + `read:org` 없으면 경고 — org 전수조사하려면 org membership + private repo read 권한 필요.
+
+(2) org 결정: default `KDL-Solution`. `gh api user/orgs --jq '.[].login'` 로 소속 org 를 보여주고, KDL 계열이 여러 개면 사용자에게 한 번 확인 (없으면 `KDL-Solution` 고정).
+
+→ 감지된 `github_login` + `github_org` 를 config 에 저장. **로컬 레포 경로(`repos`)는 더 이상 데이터 소스가 아니다** — 아래 (3) 은 gh 를 못 쓰는 환경의 optional offline fallback 일 뿐.
+
+(3) (optional, offline fallback) gh 를 쓸 수 없을 때만 로컬 레포를 스캔해 `repos` 채움:
 
 ```bash
 for parent in ~/Code ~/Workspace ~/projects ~/work ~/dev ~/Documents/Code; do
@@ -49,54 +67,27 @@ for parent in ~/Code ~/Workspace ~/projects ~/work ~/dev ~/Documents/Code; do
 done | sort -u
 ```
 
-→ KDL-Solution 또는 koreadeep 이 origin URL 에 포함된 git 레포 목록.
+추가 스캔 경로는 `scan_dirs` 에 저장 (`~` 는 `$HOME` 으로 expand). **gh 가 정상이면 이 단계는 건너뛴다.**
 
-(2) 자동 스캔 결과를 보여주고 **추가 경로를 묻는다** (개인마다 코드 디렉토리 위치가 다르므로 필수 단계):
-
-```
-🔍 자동 스캔 결과 (~/Code, ~/Workspace, ~/projects, ~/work, ~/dev, ~/Documents/Code):
-
-발견된 KDL 레포 (N개):
-  - /path/to/repo-1
-  - /path/to/repo-2
-  ...
-(또는 "발견된 레포 없음")
-
-코드가 모여있는 추가 디렉토리가 있나요?
-- 없으면 → 'skip' 또는 'n'
-- 자연어로 경로 알려주세요 (예: "~/Desktop/Kdl/Code", "/Users/me/work/koreadeep 와 ~/repos 추가")
-```
-
-사용자가 경로(들) 입력 시:
-- `~` 는 `$HOME` 으로 expand
-- 입력된 각 디렉토리에 대해 (1) 과 동일한 스캔 로직 재실행
-- 자동 스캔 결과 ∪ 추가 스캔 결과 → 최종 후보 리스트
-- 추가 경로 자체는 향후 재실행 시 활용하기 위해 config 의 `scan_dirs` 필드(string array) 에 저장
-
-`skip` / `n` / 빈 입력 → 자동 스캔 결과만 사용.
-
-**B-2. git author 자동 감지**
+**B-2. commit author email 감지 (보조)**
 
 ```bash
 git config --global user.email
 ```
 
-→ 비어 있으면 (드물게) 각 레포의 `git config user.email` 중 가장 자주 등장하는 값 사용. 그것도 없으면 사용자에게 한 번 물음.
+- 원격 검색의 primary 기준은 `github_login` (B-1). 다만 **GitHub 계정에 연결 안 된 이메일**로 커밋된 것까지 잡으려면 `gh search commits --author-email` union 이 필요 → 알려진 이메일을 `git_authors` (배열) 에 모은다.
+- `~/.gitconfig` 이메일 + (있으면) GitHub noreply 이메일을 모두 포함. 비어 있으면 각 레포 `git config user.email` 중 최빈값. 그것도 없으면 사용자에게 한 번 물음.
 
 **B-3. 감지 결과 표 출력 + 한 번 확인**
 
 ```
 🔍 Auto-detected:
 
-git author: <감지된 이메일>  (from ~/.gitconfig)
+GitHub user: <github_login>   (from gh api user — 원격 commit/PR author 기준)
+GitHub org : <github_org>     (default KDL-Solution — 전수조사 대상)
+git emails : <git_authors[]>  (commit author-email union 보강용)
 
-KDL repos found (N):
-  1. <발견된 레포 절대경로>
-  2. ...
-
-Scan dirs (저장됨, 다음 번에도 사용):
-  - ~/Code, ~/Workspace, ... (기본)
-  - <사용자가 추가한 경로> (있으면)
+(offline fallback only) 로컬 KDL repos: N개  /  scan dirs: ~/Code, ~/Workspace, ...
 
 Defaults:
 - working hours/day:    8h
@@ -124,9 +115,12 @@ Defaults:
 저장 포맷 (참고):
 ```json
 {
-  "repos": ["<발견된 KDL 레포 절대경로>", "..."],
+  "github_org": "KDL-Solution",
+  "github_login": "<gh api user 의 login>",
+  "git_authors": ["<email1>", "<email2>"],
+  "git_author": "<단일 이메일 — 하위호환용, git_authors 없을 때만 사용>",
+  "repos": ["<offline fallback 용 로컬 레포 경로 — gh 정상이면 미사용>", "..."],
   "scan_dirs": ["~/Code", "~/Workspace", "~/projects", "~/work", "~/dev", "~/Documents/Code"],
-  "git_author": "<git config user.email 결과>",
   "working_hours_per_day": 8,
   "working_days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
   "ticket_pattern": "[A-Z][A-Z0-9_]+-\\d+",
@@ -137,7 +131,8 @@ Defaults:
 }
 ```
 
-`scan_dirs` 는 사용자가 추가 입력한 경로를 포함하여 영구 저장 — `reconfigure` 또는 `--reset` 으로 다시 실행 시 기본값으로 사용된다.
+- `github_org` + `github_login` 이 **원격 전수조사의 핵심**. 둘 다 있으면 Step 2 가 org 전체를 돈다.
+- `repos` / `scan_dirs` 는 offline fallback 전용 — `reconfigure` / `--reset` 재실행 시 `scan_dirs` 가 기본 스캔 경로로 쓰인다.
 
 ---
 
@@ -158,27 +153,57 @@ User 의 `$ARGUMENTS` 를 보고 기간 결정:
 
 ---
 
-## Step 2 — Collect git activity
+## Step 2 — Collect GitHub activity (원격 전수조사 / org-wide census)
 
-각 `repos[i]` 에 대해 한 번씩. **subject 만이 아니라 commit body 까지 전수 조사**한다 — squash-merge PR 커밋은 JIRA 키가 subject 가 아니라 **body** 에만 있는 경우가 많다 (예: subject 는 `(#911)` PR 번호만, body 에 `JUNGLETFT-881`):
+**데이터 소스 = `github_org` 전체 (default `KDL-Solution`), `gh` CLI 로 원격 조회.** 로컬 레포를 훑지 않는다. 두 가지를 모두 전수조사: **(A) 커밋**, **(B) PR**.
+
+### 2-A. 커밋 전수조사 — `gh search commits` (org-wide)
 
 ```bash
-git -C <repo> log \
-  --author="<git_author>" \
-  --since="<start>" --until="<end>" \
-  --no-merges \
-  --pretty=format:'@@C@@%H|%aI|%s%n%b'
+# author = github_login (GitHub 계정 기준). --limit 은 넉넉히 (검색 API 최대 1000).
+gh search commits --owner "<github_org>" --author "<github_login>" \
+  --author-date "<start>..<end>" --limit 1000 \
+  --json sha,repository,commit \
+  --jq '.[] | {sha:.sha, repo:.repository.name, date:.commit.author.date, msg:.commit.message}'
+
+# (보강) GitHub 계정에 연결 안 된 이메일 커밋까지: git_authors 의 각 이메일로 한 번 더 union
+gh search commits --owner "<github_org>" --author-email "<git_authors[i]>" \
+  --author-date "<start>..<end>" --limit 1000 --json sha,repository,commit --jq '...'
 ```
 
-- 출력은 `@@C@@` 로 커밋 단위 분리. 각 레코드 = 헤더줄 `HASH|ISO|subject` + 다음 `@@C@@` 전까지의 body 여러 줄.
-- `git_author` config 에 명시 안 되어 있으면, 각 레포의 `git -C <repo> config user.email` 결과 사용
-- `--no-merges` 로 머지 commit 제외
-- 각 commit 에서:
-  - 날짜 (커밋 author date 의 로컬 타임존 기준 YYYY-MM-DD)
-  - JIRA 키 추출 — 정규식 `config.ticket_pattern` (default `[A-Z][A-Z0-9_]+-\d+` — 모든 프로젝트). **subject + body + 브랜치명 전부**에서 매칭.
-    - **primary 키** 우선순위: (1) subject 의 키 → (2) 브랜치명 (`git -C <repo> name-rev --name-only <sha>`) → (3) body 의 **첫** 키. 셋 다 없으면 `null`
-    - **rollup 커밋 주의**: `release:` / `chore: sync` 처럼 body 가 여러 키를 나열하는 배포·동기화 커밋은 그 키 전부에 시간을 분배하지 말 것 (과대계상). primary 키 1개만 쓰거나, 키가 없으면 deploy/bucket 으로 떨군다.
-  - subject + body (요약용)
+- **org 전체**가 대상 — 어느 레포든 본인 커밋이면 잡힌다. 로컬에 클론 안 한 레포도 포함 (원격의 강점).
+- `commit.message` 는 **subject + body 전체**. 티켓 키는 subject 뿐 아니라 body 에도 흔하다 (squash-merge: subject 는 `(#911)`, body 에 `JUNGLETFT-881`).
+- `gh search commits` 는 **default 브랜치만** 인덱싱한다 → 머지된 작업(squash 커밋, author 는 본인으로 보존)은 잡히지만 **아직 안 머지된 작업브랜치 커밋은 안 잡힌다**. 그 공백은 2-B 의 PR 전수조사가 메운다.
+- **머지 커밋 제외**: `gh search commits` 엔 `--no-merges` 가 없으니 `msg` 가 `Merge pull request` / `Merge branch` 로 시작하면 client-side 로 버린다.
+- 여러 author/email 쿼리 결과는 `sha` 로 **dedup** (union).
+- 날짜는 `commit.author.date` (ISO `+09:00`) 의 로컬 날짜로 버킷팅. `--author-date` 경계가 애매하면 양옆 하루 넓혀 받고 최종 날짜로 필터.
+- 각 커밋에서 티켓 키 추출 (`config.ticket_pattern`, default `[A-Z][A-Z0-9_]+-\d+`):
+  - **primary 키** 우선순위: (1) subject(첫 줄)의 키 → (2) PR 브랜치명 (2-B 에서 매칭되면) → (3) body 의 **첫** 키. 없으면 `null`.
+  - **rollup 커밋 주의**: `release:` / `chore: sync` 등 body 가 여러 키를 나열하는 배포·동기화 커밋은 그 키 전부에 시간 분배 금지 (과대계상). primary 1개만, 키 없으면 deploy/bucket 으로 떨군다.
+
+### 2-B. PR 전수조사 — `gh search prs` (org-wide)
+
+squash·rebase 머지로 개별 커밋이 사라지거나, 리뷰·미머지 작업처럼 커밋 검색이 못 잡는 활동을 PR 로 보강한다.
+
+```bash
+# 본인이 연 PR — 기간 내 활동(updated) 기준
+gh search prs --owner "<github_org>" --author "<github_login>" \
+  --updated "<start>..<end>" --limit 200 \
+  --json number,title,repository,state,createdAt,updatedAt,closedAt,url,body
+
+# (보강) 본인이 리뷰한 PR — 리뷰도 작업 시간
+gh search prs --owner "<github_org>" --reviewed-by "<github_login>" \
+  --updated "<start>..<end>" --limit 200 --json number,title,repository,state,updatedAt,url
+```
+
+- 각 PR 에서 티켓 키 추출 — **title + 브랜치명(있으면) + body** 전부에서. (title 에 PR# 만 있을 때 브랜치명이 키 출처가 된다.)
+- PR → 날짜 매핑: merged 면 merge/`closedAt` 날짜, 아니면 기간 내 `updatedAt` 의 로컬 날짜. 기간 밖이면 버린다.
+- PR 활동은 **보조 신호** — 시간 분배의 분모(커밋 수)에 직접 더하지 않는다. 대신:
+  - 커밋이 못 잡은 티켓 키를 draft 에 노출 (커밋 0 인 날의 후보로, hours=0 사용자 입력).
+  - draft 근거란을 풍부하게 (`PR #931 merged`, `PR #944 review` 등).
+- authored ∪ reviewed-by 결과는 `repo#number` 로 dedup.
+
+> **offline fallback**: `gh` 를 못 쓰면 (인증 없음 등) `repos[]` 로컬 레포에서 `git log --all --no-merges --author=<git_authors[i]> --since --until --pretty=format:'@@C@@%H|%aI|%s%n%b'` 로 대체 수집한다 (`@@C@@` 커밋 분리, subject+body 키 추출). 단 클론 안 한 레포·미pull 커밋은 누락 가능 — gh 경로를 우선한다.
 
 ---
 
@@ -197,7 +222,9 @@ git -C <repo> log \
 }
 ```
 
-`(no-key)` 는 `buckets[0].key` 로 매핑. config 에 없으면 사용자에게 한 번 물음.
+- `repos` 값은 `commit.repository.name` (gh) 에서 온다.
+- **PR-only 티켓** (2-B 에서만 잡히고 커밋 0): 같은 구조에 `commits: 0` 으로 추가, 근거에 `PR #N <state>` 표기 (Step 4 의 JIRA-only 와 동일 취급, hours=0 사용자 입력).
+- `(no-key)` 는 `buckets[0].key` 로 매핑. config 에 없으면 사용자에게 한 번 물음.
 
 ---
 
@@ -227,6 +254,13 @@ JQL: project in (<config 의 모든 프로젝트>) AND summary ~ "<subject 핵�
 
 - 매칭된 티켓이 본인 assignee 이고 의미가 맞으면 그 키로 매핑 (draft 표 근거란에 `(추정: summary 매칭)` 표기).
 - 그래도 못 찾으면 `(no-key)` → `buckets[0].key`.
+
+### Step 4-ter — 3-소스 교차 self-check (전수조사 검증)
+
+수집이 끝나면 **커밋 키 집합 (2-A) ∪ PR 키 집합 (2-B) ∪ JIRA 활동 키 집합 (Step 4)** 을 대조한다.
+
+- 한 소스에만 있는 키도 **드롭하지 말고** draft 에 모두 노출 (커밋 없으면 hours=0, 사용자가 채움).
+- 2-A / 2-B 가 빈 결과면 비정상 신호 — gh scope (`repo`, `read:org`) / `github_org` / `github_login` 을 재확인하고 사용자에게 알린다 (조용히 0건으로 넘어가지 말 것).
 
 ---
 
@@ -385,7 +419,8 @@ https://koreadeep.atlassian.net/plugins/servlet/ac/io.tempo.jira/tempo-app#!/my-
 1. **사용자 명시 confirm 없이는 절대 submit 하지 말 것** — Step 7 / 8 에서 `y` / `yes` 받기 전까지 `addWorklogToJiraIssue` 호출 금지.
 2. **이미 입력된 worklog 중복 방지** — Step 1 직후, 해당 기간의 기존 worklog 를 `mcp__atlassian__getJiraIssue` 의 worklog field 또는 JQL `worklogAuthor = currentUser() AND worklogDate >= "<start>"` 로 조회. 같은 (날짜, 티켓) 조합이 이미 있으면 draft 표에 ⚠️ "이미 입력됨 — 추가 입력?" 표시.
 3. **destructive 변경 금지** — 기존 worklog 를 덮어쓰거나 삭제하지 않음. update/delete 가 필요하면 사용자가 직접 Tempo UI 에서 처리.
-4. **에러는 즉시 보고** — git/JIRA 호출 실패 시 어느 단계에서 멈췄는지 명확히.
+4. **에러는 즉시 보고** — gh/JIRA 호출 실패 시 어느 단계에서 멈췄는지 명확히.
+5. **원격 전수조사 필수** — 커밋·PR 은 항상 `gh search` 로 `github_org` 전체를 author = `github_login` (+ `git_authors` 이메일 union) 기준으로 빠짐없이 수집한다. 로컬 클론·체크아웃 브랜치에 의존하지 않는다. 커밋 키 / PR 키 / JIRA 키 세 집합을 대조해 한 소스에만 있는 것도 draft 에 노출한다 (Step 4-ter).
 
 ---
 
