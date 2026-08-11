@@ -62,7 +62,8 @@
 | `repos` / `scan_dirs` | **offline fallback 전용** 로컬 git 레포 / 스캔 경로. gh 정상이면 미사용 |
 | `working_hours_per_day` | 하루 분배할 총 시간 (default 8h) |
 | `working_days` | 분배 대상 요일 |
-| `ticket_pattern` | commit/PR/브랜치명에서 티켓 키 추출 정규식 |
+| `ticket_pattern` | commit/PR/브랜치명에서 티켓 키 추출 정규식 (브랜치명은 대문자 정규화 후 매칭) |
+| `projects` | 추적 대상 Jira 프로젝트 키 (default `["JUNGLETFT", "DPS"]`). 키 못 찾은 commit 을 summary 로 역추적할 때의 검색 범위 |
 | `trackable_epics` | 이 에픽들 밖 티켓에 worklog 입력 시 ⚠️ 경고 (`[]` = 모든 에픽 ✅) |
 | `buckets[0].key` | JIRA 키 없는 commit 들의 default landing ticket. 비어 있으면 매번 물음 |
 
