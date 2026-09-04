@@ -154,6 +154,21 @@ User 의 `$ARGUMENTS` 를 보고 기간 결정:
 
 `working_days` 에 포함된 요일만 분배 대상이 된다.
 
+### Step 1-bis — 비업무 시간 (연차 · 반차 · 회의) 인식
+
+`$ARGUMENTS` 에 아래 표현이 있으면 그 시간을 **비업무 블록**으로 먼저 떼어 놓는다. 남은 시간만 commit/PR 비례 분배 대상이 된다.
+
+| 입력 예 | 블록 | 기본 시간 | 기본 배치 |
+|---|---|---|---|
+| `연차`, `휴가`, `day off` | 연차 | `working_hours_per_day` 전부 | 09:00 부터 하루 전체 |
+| `반차`, `half day` | 반차 | `working_hours_per_day / 2` | 오전·오후 자동 판정 (아래) |
+| `오전 반차` / `오후 반차` | 반차 | 〃 | 명시된 쪽 |
+| `회의 2h`, `미팅 1시간`, `스크럼 30분` | 회의 | 명시값 (없으면 1h) | 업무 블록 사이 빈 슬롯 |
+
+**반차 오전·오후 자동 판정** — 명시가 없으면 그날 GitHub 커밋과 PR 활동 시각의 중앙값으로 정한다. 활동이 오전에 몰려 있으면 반차는 오후, 오후에 몰려 있으면 반차는 오전. 활동이 아예 없으면 오후 반차로 둔다.
+
+시간이 함께 오면 (`반차 4시간`, `회의 2h`) 그 값이 기본값을 이긴다.
+
 ---
 
 ## Step 2 — Collect GitHub activity (원격 전수조사 / org-wide census)
@@ -268,6 +283,38 @@ JQL: project in (<config.projects — default JUNGLETFT, DPS>) AND summary ~ "<s
 
 ---
 
+### Step 4-quater — 비업무 티켓 해소 (**기존 티켓 재사용, 생성 금지**)
+
+Step 1-bis 에서 블록이 잡혔으면 쓸 티켓을 **찾아서** 쓴다. 새로 만들지 않는다 — 이 워크스페이스는 같은 휴가·회의 티켓 하나에 날짜별 worklog 를 계속 쌓는 방식이다 (예: `반차 (7/16)` 티켓에 7/16, 9/1, 9/4 worklog 가 함께 들어감).
+
+블록별 JQL 검색어:
+
+| 블록 | summary 검색어 |
+|---|---|
+| 연차 | `"연차"`, `"휴가"` |
+| 반차 | `"반차"`, `"연차"`, `"휴가"` |
+| 회의 | `"회의"`, `"미팅"`, `"스크럼"` |
+
+```
+JQL: assignee = currentUser()
+     AND (summary ~ "<검색어1>" OR summary ~ "<검색어2>" ...)
+     ORDER BY updated DESC
+```
+
+→ `mcp__atlassian__searchJiraIssuesUsingJql` (fields 는 `["summary"]` 로 좁혀 응답 크기를 줄인다).
+
+**후보가 여럿이면 고르는 순서:**
+1. 본인이 **가장 최근에 worklog 를 남긴** 티켓. 후보들의 `worklog` field 를 조회해 `author` 가 본인인 항목의 최신 `started` 를 비교한다. 재사용 이력이 그 사람의 관례다.
+2. worklog 이력이 없으면 `updated` 가 최신인 티켓.
+
+**summary 의 날짜는 무시한다.** `반차 (7/16)` 처럼 지난 날짜가 제목에 박혀 있어도 그 티켓이 계속 쓰이는 통이면 오늘 worklog 를 거기 넣는다. 제목을 고치지 않는다.
+
+**후보가 하나도 없으면** draft 표에 `❓ 티켓 없음` 으로 표시하고 사용자에게 키를 묻는다. **임의로 티켓을 생성하지 않는다** — Jira 티켓 생성은 되돌리기 어렵고 팀 보드에 노출된다.
+
+**회의는 자동 선택하지 않는다.** 내부 스크럼과 고객사 미팅은 성격이 다르므로, 후보가 2개 이상이면 draft 에 후보를 나열해 사용자가 고르게 한다. 후보가 정확히 1개일 때만 자동 채택.
+
+---
+
 ## Step 5 — Compute hours per (date, ticket)
 
 각 날짜에 대해:
@@ -282,6 +329,7 @@ for each ticket:
 특수 케이스:
 - `total_commits_that_day == 0` (commit 없이 JIRA 활동만): 후보만 나열, hours = 0, 사용자가 채움
 - 단일 티켓만 있는 날: 그 티켓에 8h 전부 (또는 working_hours_per_day)
+- **비업무 블록이 있는 날**: `working_hours_per_day` 에서 블록 시간을 먼저 빼고 **남은 시간만** commit 비율로 나눈다. 예를 들어 8h 중 반차 4h 면 commit 분배 대상은 4h. 블록이 하루를 다 먹으면 (연차) commit 분배를 건너뛰고 그날은 블록 하나만 남긴다.
 
 ---
 
@@ -384,6 +432,15 @@ Tempo UI 는 같은 날 여러 worklog 를 `started` 시각 기준으로 캘린�
    ```
 4. 점심시간 같은 휴게는 별도로 끼워 넣지 않는다 (사용자가 표에 명시한 시간만 정직하게 채움)
 
+**9-1-bis. 비업무 블록 배치**
+
+- **연차**: 09:00 부터 하루 전체. 그날 업무 entry 는 없다.
+- **반차 (오전)**: 09:00 시작. 업무 블록은 반차가 끝난 시각부터 cursor 를 돌린다.
+- **반차 (오후)**: 업무 블록을 09:00 부터 먼저 채우고, 그 끝에 반차를 붙인다.
+- **회의**: `occupied` 슬롯과 동일하게 취급해 cursor 알고리즘에 그대로 태운다.
+
+worklog comment 에는 **날짜와 반나절을 함께 적는다** (`반차 (2026-09-04 오후)`, `연차 (2026-09-10)`). 재사용 티켓에는 여러 날 worklog 가 쌓이므로, comment 가 어느 날 것인지 구분하는 유일한 단서다.
+
 **9-2. 제출 순서**
 
 각 entry 를 `started` 오름차순으로 **순차 호출** (병렬 X). 같은 시각이라도 정렬 안정성을 위해 표 순서 유지.
@@ -425,13 +482,14 @@ https://koreadeep.atlassian.net/plugins/servlet/ac/io.tempo.jira/tempo-app#!/my-
 3. **destructive 변경 금지** — 기존 worklog 를 덮어쓰거나 삭제하지 않음. update/delete 가 필요하면 사용자가 직접 Tempo UI 에서 처리.
 4. **에러는 즉시 보고** — gh/JIRA 호출 실패 시 어느 단계에서 멈췄는지 명확히.
 5. **원격 전수조사 필수** — 커밋·PR 은 항상 `gh search` 로 `github_org` 전체를 author = `github_login` (+ `git_authors` 이메일 union) 기준으로 빠짐없이 수집한다. 로컬 클론·체크아웃 브랜치에 의존하지 않는다. 커밋 키 / PR 키 / JIRA 키 세 집합을 대조해 한 소스에만 있는 것도 draft 에 노출한다 (Step 4-ter).
+6. **Jira 티켓 생성 금지** — 연차·반차·회의를 포함해 어떤 경우에도 이 명령이 티켓을 새로 만들지 않는다. 쓸 티켓을 못 찾으면 사용자에게 묻는다 (Step 4-quater).
 
 ---
 
 ## Now do this
 
-1. Step 0 (config bootstrap) → Step 1 (period) → Step 2~6 (수집/계산) → Step 7 (draft 표) → Step 8 (편집 loop) → Step 9 (제출) → Step 10 (보고).
+1. Step 0 (config bootstrap) → Step 1 + 1-bis (period + 비업무 블록) → Step 2~6 (수집/계산) → Step 7 (draft 표) → Step 8 (편집 loop) → Step 9 (제출) → Step 10 (보고).
 2. 각 단계에서 raw 데이터를 user 에게 모두 보여주지 말고 표 형식으로 압축.
 3. 한 번에 한 단계씩 진행. 단, Step 2~6 은 백엔드 작업이라 사용자 개입 없이 연속 실행. Step 7 에서만 멈춰서 confirm.
 
-`$ARGUMENTS` 는 기간 지정 (없으면 이번 주).
+`$ARGUMENTS` 는 기간 지정 (없으면 이번 주) + 비업무 블록 지정 (`반차`, `연차`, `회의 2h` 등, Step 1-bis).
